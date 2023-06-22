@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      #game-container {
+	  position: relative;
+	  width: 1000px;
+	  height: 700px;
+	  border: 1px solid #000;
+      }
+
+      .dot {
+	  position: absolute;
+	  width: 10px;
+	  height: 10px;
+	  border-radius: 50%;
+	  background-color: #000;
+      }
+
+      .line {
+	  position: absolute;
+	  background-color: #000;
+      }
+
+      .triangle {
+	  position: absolute;
+      }
+
+      #score {
+	  font-weight: bold;
+      }
+
+      #senscore {
+	  font-weight: bold;
+      }
+
+      #ecscore {
+	  font-weight: bold;
+      }
+
+      #preview {
+	  font-style: italic;
+      }
+
+      #message {
+	  font-weight: bold;
+      }
+
+      #restart {
+	  margin-top: 10px;
+	  cursor: pointer;
+	  color: blue;
+	  text-decoration: underline;
+      }
+
+
+      #download {
+	  margin-top: 10px;
+	  cursor: pointer;
+	  color: blue;
+	  text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Spublin</h1>
+    <div id="game-container">
+      <canvas id="canvas" width="1000" height="700"></canvas>
+      <div id="score">House Score: Red: 0, Blue: 0</div>
+      <div id="senscore">Senate Score: Red: 0, Blue: 0</div>
+      <div id="ecscore">Electoral College Score: Red: 0, Blue: 0</div>
+      <div id="wecscore">Weighted Electoral College Score: Red: 0, Blue: 0</div>
+      <div id="preview"></div>
+      <div id="message"></div>
+      <div id="restart">Restart Game</div>
+      <div id="download">Download Scores</div>
+    </div>
+
+    <script>
+      const canvas_ = document.getElementById('canvas');
+      const ctx_ = canvas_.getContext('2d');
+      const dotSize_ = 10;
+      const dotColor_ = '#000';
+      const lineColor1_ = '#ff0000';
+      const lineColor2_ = '#0000ff';
+      const illegalLineColor_ = '#000000';
+      const triangleColor1_ = 'rgba(255, 0, 0, 0.1)';
+      const triangleColor2_ = 'rgba(0, 0, 255, 0.1)';
+      const dots_ = [];
+      const lines_ = [];
+      const all_triangles_ = [];
+      const checkers_mode_ = confirm("Do you want to force each user to take all available triangles?");
+
+
+      let currentPlayer_ = 1;
+      let house_score_ = [0, 0];
+      let senate_score_ = [0, 0];
+      let ec_score_for_dot_ = {};
+
+      let score_history_ = [
+	  [0,0],
+	  [0,0],
+	  [0,0],
+	  [0,0],
+	  [0,0],
+	  [0,0],
+	  [0,0],
+	  [0,0],
+      ]
+
+      let gameEnded_ = false;
+      let isDragging_ = false;
+      let dragStartDot_ = null;
+
+      function populate_dots( ndots ){
+	  // Generate random dots
+	  const min_dist = dotSize_ * 3;
+	  for (let i = 0; i < ndots; i++) {
+
+	      let x = null;
+	      let y = null;
+
+	      let too_close = true;
+	      while( too_close ){
+		  x = Math.floor(Math.random() * (canvas_.width - dotSize_));
+		  y = Math.floor(Math.random() * (canvas_.height - dotSize_));
+
+		  too_close = false;
+		  for( const d of dots_ ){
+		      a = d.x - x
+		      b = d.y - y
+		      dist = Math.sqrt( a*a + b*b );
+		      if ( dist < min_dist ){
+			  too_close = true;
+			  break;
+		      }
+		  }
+		  
+	      }
+
+	      dot = { x, y };
+	      dots_.push(dot);
+	      ec_score_for_dot_[dot2string(dot)] = [0,0];
+	  }
+      }
+      const ndots = prompt( "How many dots do you want, buddy?", 10 );
+      populate_dots( ndots );
+
+      // Add event listeners
+      canvas_.addEventListener('mousedown', handleMouseDown);
+      canvas_.addEventListener('mousemove', handleMouseMove);
+      canvas_.addEventListener('mouseup', handleMouseUp);
+      canvas_.addEventListener('mouseout', handleMouseOut);
+
+      // Add click event listener to restart button
+      const restartBtn = document.getElementById('restart');
+      restartBtn.addEventListener('click', restartGame);
+
+      const downloadBtn = document.getElementById('download');
+      downloadBtn.addEventListener('click', downloadCSV);
+
+      // Draw initial dots on the canvas
+      clearBoard();
+
+      function dot2string( dot ){
+	  return `${dot.x}_${dot.y}`;
+      }
+
+      // Function to handle mouse down events on the canvas
+      function handleMouseDown(event) {
+	  if (gameEnded_) return;
+
+	  const rect = canvas_.getBoundingClientRect();
+	  const x = event.clientX - rect.left;
+	  const y = event.clientY - rect.top;
+
+	  // Check if the clicked position is within a dot
+	  const clickedDot = dots_.find(dot => isPointInDot(x, y, dot));
+	  if (!clickedDot) return;
+
+	  // Check if the clicked dot is already connected to another dot by a line
+	  //const connectedDot = lines.find(line => line.dot1 === clickedDot || line.dot2 === clickedDot);
+	  //if (connectedDot) return;
+
+	  // Set the starting dot for the drag
+	  dragStartDot_ = clickedDot;
+	  isDragging_ = true;
+
+	  // Add event listeners for drag events
+	  canvas_.addEventListener('mousemove', handleMouseMove);
+	  canvas_.addEventListener('mouseup', handleMouseUp);
+      }
+
+      // Function to handle mouse move events on the canvas
+      function handleMouseMove(event) {
+	  //if (gameEnded_ || !isDragging_) return;
+
+	  // Redraw the lines and preview line
+	  drawLines();
+	  if (isDragging_){
+	      const rect = canvas_.getBoundingClientRect();
+	      const x = event.clientX - rect.left;
+	      const y = event.clientY - rect.top;
+	      drawPreviewLine(x,y);
+	  }
+      }
+
+
+      // Given three collinear points p, q, r, the function checks if
+      // point q lies on line segment 'pr'
+      function onSegment(p, q, r)
+      {
+	  if (q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) &&
+              q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y))
+	      return true;
+	  
+	  return false;
+      }
+  
+      // To find orientation of ordered triplet (p, q, r).
+      // The function returns following values
+      // 0 --> p, q and r are collinear
+      // 1 --> Clockwise
+      // 2 --> Counterclockwise
+      function orientation(p, q, r)
+      {
+  
+	  // See https://www.geeksforgeeks.org/orientation-3-ordered-points/
+	  // for details of below formula.
+	  const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+    
+	  if (val == 0) return 0; // collinear
+    
+	  return (val > 0)? 1: 2; // clock or counterclock wise
+      }
+  
+      // The main function that returns true if line segment 'p1q1'
+      // and 'p2q2' intersect.
+      function doIntersect(p1, q1, p2, q2)
+      {
+
+	  // Find the four orientations needed for general and
+	  // special cases
+	  let o1 = orientation(p1, q1, p2);
+	  let o2 = orientation(p1, q1, q2);
+	  let o3 = orientation(p2, q2, p1);
+	  let o4 = orientation(p2, q2, q1);
+	  
+	  // General case
+	  if (o1 != o2 && o3 != o4)
+              return true;
+    
+	  // Special Cases
+	  // p1, q1 and p2 are collinear and p2 lies on segment p1q1
+	  if (o1 == 0 && onSegment(p1, p2, q1)) return true;
+    
+	  // p1, q1 and q2 are collinear and q2 lies on segment p1q1
+	  if (o2 == 0 && onSegment(p1, q2, q1)) return true;
+    
+	  // p2, q2 and p1 are collinear and p1 lies on segment p2q2
+	  if (o3 == 0 && onSegment(p2, p1, q2)) return true;
+    
+	  // p2, q2 and q1 are collinear and q1 lies on segment p2q2
+	  if (o4 == 0 && onSegment(p2, q1, q2)) return true;
+	  
+	  return false; // Doesn't fall in any of the above cases
+      }
+
+      function lineCrossesExistingLine(line){
+	  for( const l of lines_ ){
+	      // If they share a point, then they don't intersect
+	      if( line.dot1 === l.dot1 ) continue;
+	      if( line.dot1 === l.dot2 ) continue;
+	      if( line.dot2 === l.dot1 ) continue;
+	      if( line.dot2 === l.dot2 ) continue;
+
+	      if( doIntersect(line.dot1,line.dot2,l.dot1,l.dot2) ) return true;
+	  }
+	  return false;
+      }
+
+      function lineExists(dot1,dot2){
+	  linex = lines_.find(line => (line.dot1 === dot1 && line.dot2 === dot2) || (line.dot1 === dot2 && line.dot2 === dot1) );
+	  //still learning js...
+	  if (linex) return true;
+	  else return false;
+      }
+
+      function closestDistanceToLineSegment(a, b, c, lengthSquaredAB) {
+	  // If the line segment has zero length, return the distance from point C to A
+	  if (lengthSquaredAB === 0) {
+	      return Math.sqrt((c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y));
+	  }
+
+	  // Calculate the parameter t to determine the point on the line segment AB that is closest to point C
+	  var t = ((c.x - a.x) * (b.x - a.x) + (c.y - a.y) * (b.y - a.y)) / lengthSquaredAB;
+
+	  // If t is less than 0, the closest point is A
+	  if (t < 0) {
+	      return Math.sqrt((c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y));
+	  }
+
+	  // If t is greater than 1, the closest point is B
+	  if (t > 1) {
+	      return Math.sqrt((c.x - b.x) * (c.x - b.x) + (c.y - b.y) * (c.y - b.y));
+	  }
+
+	  // Calculate the coordinates of the closest point on the line segment AB
+	  var closestX = a.x + t * (b.x - a.x);
+	  var closestY = a.y + t * (b.y - a.y);
+
+	  // Calculate the distance from point C to the closest point on the line segment AB
+	  return Math.sqrt((c.x - closestX) * (c.x - closestX) + (c.y - closestY) * (c.y - closestY));
+      }
+
+
+      function lineComesCloseToAnyDot( l ){
+	  // Calculate the squared length of the line segment AB
+	  const a = l.dot1;
+	  const b = l.dot2;
+	  var lengthSquaredAB = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+
+	  const min_dist = dotSize_;
+	  for( const d of dots_){
+	      if( d === a ) continue;
+	      if( d === b ) continue;
+	      const dist = closestDistanceToLineSegment( a, b, d, lengthSquaredAB );
+	      if (dist < min_dist) return true;
+	  }
+	  return false;
+      }
+
+      function lineIsLegal( line ){
+	  if (!line.dot1) return false;
+	  if (!line.dot2) return false;
+	  if (line.dot1 === line.dot2) return false;
+	  if ( lineComesCloseToAnyDot(line) ) return false;
+	  if (lineExists( line.dot1, line.dot2 )) return false;
+	  if (lineCrossesExistingLine(line)) return false;
+
+	  return true;
+      }
+
+      function linePassesCheckersFilter( line ){
+	  if( ! checkers_mode_ ) return true;
+
+	  tris = trianglesCreatedByLine(line);
+	  if ( tris.length > 0 ) return true;
+
+	  // look for any lines that can form triangles
+	  for( let i = 0; i < dots_.length; i++ ){
+	      for( let j = i+1; j < dots_.length; j++ ){
+		  if( line.dot1 == dots_[i] && line.dot2 == dots_[j] ) continue;
+		  if( line.dot1 == dots_[j] && line.dot2 == dots_[i] ) continue;
+
+		  line2 = { dot1: dots_[i], dot2: dots_[j], player: currentPlayer_ }
+		  if (!lineIsLegal(line2)) continue;
+
+		  tris = trianglesCreatedByLine(line2);
+		  if ( tris.length > 0 ) return false;
+
+	      }
+	  }
+	  return true;
+      }
+
+      function HandleClickedDot(clickedDot){
+	  line = { dot1: dragStartDot_, dot2: clickedDot, player: currentPlayer_ }
+	  x = typeof line
+
+	  if (lineIsLegal( line ) && linePassesCheckersFilter(line) ){
+	      ec_score_for_dot_[ dot2string(dragStartDot_) ][ currentPlayer_-1 ] += 1
+	      ec_score_for_dot_[ dot2string(clickedDot) ][ currentPlayer_-1 ] += 1
+
+              // Create a new line
+	      //alert( line );
+	      y = typeof line
+	      //alert( x === y );
+
+	      //triangles
+	      tris = trianglesCreatedByLine(line);
+	      if (tris.length > 0){
+		  area = 0.0
+		  for (const t of tris){
+		      all_triangles_.push( t );
+		      area = area + getTriangleArea(t);
+		  }
+		  if ( currentPlayer_ === 1 ){
+		      house_score_[0] += area / 1000.0;
+		      senate_score_[0] += tris.length;
+		  } else {
+		      house_score_[1] += area / 1000.0;
+		      senate_score_[1] += tris.length;
+		  }
+	      } else {
+		  // Toggle the current player
+		  togglePlayer();
+	      }
+	      
+              lines_.push(line);
+	  }
+	  drawScore();
+      }
+
+      function cleanUpAfterMouseUpOrOut(){
+	  drawLines();
+
+	  // Reset the dragging state
+	  isDragging_ = false;
+	  dragStartDot_ = null;
+	  canvas_.removeEventListener('mousemove', handleMouseMove);
+	  canvas_.removeEventListener('mouseup', handleMouseUp);
+
+	  // Check if the game has ended
+	  checkGameEnd();
+      }
+      
+      // Function to handle mouse up events on the canvas
+      function handleMouseUp() {
+	  const wasDragging = isDragging_;
+	  isDragging_ = false;
+	  canvas_.removeEventListener('mousemove', handleMouseMove);
+	  canvas_.removeEventListener('mouseup', handleMouseUp);
+
+	  const rect = canvas_.getBoundingClientRect();
+	  const x = event.clientX - rect.left;
+	  const y = event.clientY - rect.top;
+
+	  // Check if the mouse position is within a dot
+	  const clickedDot = dots_.find(dot => isPointInDot(x, y, dot));
+	  HandleClickedDot( clickedDot );
+
+	  // Redraw the lines and dots
+	  drawLines();
+
+	  cleanUpAfterMouseUpOrOut();
+      }
+
+      // Function to handle mouse out events on the canvas
+      function handleMouseOut() {
+	  cleanUpAfterMouseUpOrOut();
+      }
+
+      // Function to check if a point is within a dot
+      function isPointInDot(x, y, dot) {
+	  return (
+              x >= (dot.x-dotSize_) &&
+		  x <= (dot.x + dotSize_*2) &&
+		  y >= (dot.y-dotSize_) &&
+		  y <= dot.y + (dotSize_*2)
+	  );
+      }
+
+      // Function to calculate the area of a triangle
+      function getTriangleArea(triangle) {
+	  const { dot1, dot2, dot3 } = triangle;
+	  if (!dot3) return 0;
+	  const area = Math.abs(
+              (dot1.x * (dot2.y - dot3.y) +
+               dot2.x * (dot3.y - dot1.y) +
+               dot3.x * (dot1.y - dot2.y)) /
+		  2
+	  );
+	  return area;
+      }
+
+      function drawScore(){
+	  const scoreElement = document.getElementById('score');
+	  scoreElement.textContent = `House Score: Red: ${Math.floor(house_score_[0])}, Blue: ${Math.floor(house_score_[1])}`;
+	  const senscoreElement = document.getElementById('senscore');
+	  senscoreElement.textContent = `Senate Score: Red: ${senate_score_[0]}, Blue: ${senate_score_[1]}`;
+
+	  const ecscoreElement = document.getElementById('ecscore');
+	  const wecscoreElement = document.getElementById('wecscore');
+	  r_ec = 0;
+	  b_ec = 0;
+	  r_wec = 0;
+	  b_wec = 0;
+	  for (const d of dots_){
+	      //alert( JSON.stringify(ec_score_for_dot_) );
+	      //alert( dot2string(d) )
+	      scores = ec_score_for_dot_[dot2string(d)];
+	      //alert( scores )
+	      if ( scores[0] > scores[1] ){
+		  r_ec += 1;
+		  r_wec += scores[0]+scores[1];
+	      }
+	      else if ( scores[1] > scores[0] ){
+		  b_ec += 1;
+		  b_wec += scores[0]+scores[1];
+	      }
+	  }
+	  ecscoreElement.textContent = `Electoral College Score: Red: ${r_ec}, Blue: ${b_ec}`;
+	  wecscoreElement.textContent = `Weighted Electoral College Score: Red: ${r_wec}, Blue: ${b_wec}`;
+      }
+
+      // Function to draw the dots on the canvas
+      function clearBoard() {
+	  ctx_.clearRect(0, 0, canvas_.width, canvas_.height);
+      }
+
+      // Function to draw the lines on the canvas
+      function drawLines() {
+	  clearBoard();
+	  for (const t of all_triangles_){
+	      drawTriangle(t);
+	  }
+	  for (const line of lines_) {
+              const dot1 = line.dot1;
+              const dot2 = line.dot2;
+	      const ppp = line.player;
+              ctx_.beginPath();
+              ctx_.moveTo(dot1.x + dotSize_ / 2, dot1.y + dotSize_ / 2);
+              ctx_.lineTo(dot2.x + dotSize_ / 2, dot2.y + dotSize_ / 2);
+              ctx_.strokeStyle = ppp === 1 ? lineColor1_ : lineColor2_;
+              ctx_.stroke();
+	  }
+	  for (const dot of dots_) {
+	      ec_count = ec_score_for_dot_[ dot2string(dot) ];
+	      if( ec_count[0] > ec_count[1] ) ctx_.fillStyle = lineColor1_;
+	      else if ( ec_count[1] > ec_count[0] ) ctx_.fillStyle = lineColor2_;
+              else ctx_.fillStyle = dotColor_;
+
+              ctx_.fillRect(dot.x, dot.y, dotSize_, dotSize_);
+	  }
+
+      }
+
+      function onlyUnique(value, index, array) {
+	  return array.indexOf(value) === index;
+      }
+
+      
+      function isPointInTriangle(x, y, x1, y1, x2, y2, x3, y3) {
+	  // Calculate the barycentric coordinates of the point
+	  var denominator = ((y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3));
+	  var b1 = ((y2 - y3) * (x - x3) + (x3 - x2) * (y - y3)) / denominator;
+	  var b2 = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / denominator;
+	  var b3 = 1 - b1 - b2;
+	  
+	  // Check if the point is inside the triangle
+	  return (b1 >= 0 && b2 >= 0 && b3 >= 0);
+      }
+
+      function pointIsInsideTrigon(s, a, b, c) {
+	  return isPointInTriangle( s.x, s.y, a.x, a.y, b.x, b.y, c.x, c.y);
+	  //https://stackoverflow.com/questions/2049582/how-to-determine-if-a-point-is-in-a-2d-triangle
+	  const as_x = s.x - a.x;
+	  const as_y = s.y - a.y;
+
+	  const s_ab = (b.x - a.x) * as_y - (b.y - a.y) * as_x > 0;
+
+	  if ((c.x - a.x) * as_y - (c.y - a.y) * as_x > 0 === s_ab) 
+              return false;
+	  if ((c.x - b.x) * (s.y - b.y) - (c.y - b.y)*(s.x - b.x) > 0 !== s_ab) 
+              return false;
+	  return true;
+      }
+
+      function anyPointIsInsideTriangle( t ){
+	  count = 0;
+	  for ( const d of dots_ ){
+	      if( pointIsInsideTrigon(d, t.dot1, t.dot2, t.dot3) ) count += 1;
+	  }
+	  return count > 3;
+      }
+
+      function trianglesCreatedByLine(l3){
+	  triangles = []
+	  for (let i = 0; i < lines_.length; i++) {
+	      const l1 = lines_[i];
+	      for (let j = i+1; j < lines_.length; j++) {
+		  const l2 = lines_[j];
+		  points = [ l1.dot1, l1.dot2, l2.dot1, l2.dot2, l3.dot1, l3.dot2 ]
+		  const unique_points = points.filter(onlyUnique);
+		  if ( unique_points.length !== 3 ) continue;
+		  
+		  triangle = { dot1: unique_points[0], dot2: unique_points[1], dot3: unique_points[2], player: currentPlayer_ }
+
+		  if ( anyPointIsInsideTriangle(triangle) ) {
+		      //alert( "hi" );
+		      continue;
+		  }
+
+		  triangles.push( triangle );
+	      }
+	  }
+	  return triangles;
+      }
+
+      // Function to draw the preview line on the canvas
+      function drawPreviewLine(x,y) {
+	  if (!isDragging_) return;
+	  const dot1 = dragStartDot_;
+
+	  // Check if the mouse position is within a dot
+	  let dot2 = dots_.find(dot => isPointInDot(x, y, dot));
+	  if ( dot2 === dot1 ){
+	      dot2 = null;
+	  }
+
+	  if (dot2) {
+	      line = { dot1: dot1, dot2: dot2 };
+	      legal = lineIsLegal( line );
+
+              ctx_.beginPath();
+              ctx_.moveTo(dot1.x + dotSize_ / 2, dot1.y + dotSize_ / 2);
+              ctx_.lineTo(dot2.x + dotSize_ / 2, dot2.y + dotSize_ / 2);
+              ctx_.strokeStyle = currentPlayer_ === 1 ? lineColor1_ : lineColor2_;
+	      if (!legal){
+		  ctx_.strokeStyle = illegalLineColor_;
+	      }
+              ctx_.stroke();
+
+	      if (legal) {
+		  tris = trianglesCreatedByLine(line);
+		  area = 0.0
+		  for (const t of tris){
+		      area = area + getTriangleArea(t);
+		      //alert( area );
+		  }
+		  //const previewText = `Preview: Area - ${area}`;
+		  //const previewElement = document.getElementById('preview');
+		  //previewElement.textContent = previewText;
+	      }
+	  } else {
+              ctx_.beginPath();
+              ctx_.moveTo(dot1.x + dotSize_ / 2, dot1.y + dotSize_ / 2);
+              ctx_.lineTo(x, y);
+              ctx_.strokeStyle = currentPlayer_ === 1 ? lineColor1_ : lineColor2_;
+              ctx_.stroke();
+	  }
+      }
+
+      // Function to draw a triangle on the canvas
+      function drawTriangle(triangle) {
+	  const dot1 = triangle.dot1;
+	  const dot2 = triangle.dot2;
+	  const dot3 = triangle.dot3;
+	  ctx_.fillStyle = triangle.player === 1 ? triangleColor1_ : triangleColor2_;
+	  ctx_.beginPath();
+	  ctx_.moveTo(dot1.x + dotSize_ / 2, dot1.y + dotSize_ / 2);
+	  ctx_.lineTo(dot2.x + dotSize_ / 2, dot2.y + dotSize_ / 2);
+	  ctx_.lineTo(dot3.x + dotSize_ / 2, dot3.y + dotSize_ / 2);
+	  ctx_.closePath();
+	  ctx_.fill();
+
+	  const previewElement = document.getElementById('preview');
+	  previewElement.textContent = '';
+      }
+
+      // Function to check if the game has ended
+      function checkGameEnd() {
+	  if (gameEnded_) return;
+
+	  for( let i = 0; i < dots_.length; i++ ){
+	      for( let j = i+1; j < dots_.length; j++ ){
+		  line = { dot1: dots_[i], dot2: dots_[j], player: currentPlayer_ }
+		  if (lineIsLegal(line)) return;
+	      }
+	  }
+
+	  updateScoreHistory();
+          gameEnded_ = true;
+          const messageElement = document.getElementById('message');
+	  alert( "Game Over!" );
+      }
+
+      function compute_ec_scores(){
+	  r_ec = 0;
+	  b_ec = 0;
+	  r_wec = 0;
+	  b_wec = 0;
+	  for (const d of dots_){
+	      scores = ec_score_for_dot_[dot2string(d)];
+	      if ( scores[0] > scores[1] ){
+		  r_ec += 1;
+		  r_wec += scores[0]+scores[1];
+	      }
+	      else if ( scores[1] > scores[0] ){
+		  b_ec += 1;
+		  b_wec += scores[0]+scores[1];
+	      }
+	  }
+
+	  return [ r_ec, b_ec, r_wec, b_wec ]
+      }
+
+      function updateScoreHistory(){
+	  score_history_[0].push( Math.floor(house_score_[0]) )
+	  score_history_[1].push( Math.floor(house_score_[1]) )
+	  score_history_[2].push( Math.floor(senate_score_[0]) )
+	  score_history_[3].push( Math.floor(senate_score_[1]) )
+
+	  //REDUNDANT WITH SCOREBOARD - TODO
+	  ec_scores = compute_ec_scores()
+
+	  for ( let i = 0; i < ec_scores.length; i++ ){
+	      score_history_[4+i].push( ec_scores[i] )
+	  }
+
+      }
+
+      // Function to toggle the current player
+      function togglePlayer() {
+	  currentPlayer_ = currentPlayer_ === 1 ? 2 : 1;
+	  updateScoreHistory()
+      }
+
+      // Function to restart the game
+      function restartGame() {
+	  location.reload();
+      }
+
+      function downloadCSV() {
+          // Generate the CSV content
+          let csvContent = 'turn,Red House,Blue House,Red Senate,Blue Senate,Red EC,Blue EC,Red Weighted EC, Blue Weighted EC\n';
+          const rows = score_history_[0].length;
+          const columns = score_history_.length;
+          
+          for (let i = 1; i < rows; i++) {
+	      csvContent += i + ',';
+              for (let j = 0; j < columns; j++) {
+		  csvContent += score_history_[j][i] + ','; // Generate a random number
+              }
+              csvContent += '\n'; // Add a newline after each row
+          }
+          
+          // Create a Blob containing the CSV data
+          const blob = new Blob([csvContent], { type: 'text/csv' });
+          
+          // Create a temporary download link and trigger the download
+          const downloadLink = document.createElement('a');
+          downloadLink.href = URL.createObjectURL(blob);
+          downloadLink.download = 'spublin_scores.csv';
+          downloadLink.click();
+      }
+
+    </script>
+  </body>
+</html>
